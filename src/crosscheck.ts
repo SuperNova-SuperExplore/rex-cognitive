@@ -257,6 +257,84 @@ for (const [posText, negText] of pairTests) {
   }
 }
 
+// ─── Phase 2 Tests ──────
+
+// Test 6: Steel-Man patterns
+console.log("\n─── TEST BLOCK 6: STEEL-MAN DETECTOR ───");
+const COUNTER_ARG_MARKERS = /\b(however|on the other hand|counter.?argument|one could argue|opponents? (might|could|would|say)|critics? (might|could|would|say|argue)|the (opposing|contrary|alternative) (view|position|argument)|devil's advocate|it could be argued|some (might|would|could) (say|argue)|admittedly)\b/i;
+const LIMITATION_MARKERS = /\b(limitation|caveat|weakness|drawback|shortcoming|this (doesn't|does not) (account|address|cover|handle)|not applicable|edge case|exception|fails? (when|if|for)|breaks? down (when|if)|blind spot|gap in)\b/i;
+const ALTERNATIVE_MARKERS = /\b(alternatively|another (approach|option|way|method|perspective)|other (options?|approaches?|methods?|ways?)|could also|might also|instead of|rather than|as opposed to|compared to|versus|vs\.?)\b/i;
+
+const steelManTests = [
+  { pattern: COUNTER_ARG_MARKERS, name: "counter-arg", tests: [
+    { input: "However, critics might argue this approach is flawed", expected: true },
+    { input: "One could argue the opposite position is stronger", expected: true },
+    { input: "Admittedly, there are valid concerns about this", expected: true },
+    { input: "The data clearly supports our position", expected: false },
+  ]},
+  { pattern: LIMITATION_MARKERS, name: "limitation", tests: [
+    { input: "A key limitation of this approach is scalability", expected: true },
+    { input: "This fails when the input exceeds 10MB", expected: true },
+    { input: "There is an edge case we haven't addressed", expected: true },
+    { input: "The system works perfectly in all scenarios", expected: false },
+  ]},
+  { pattern: ALTERNATIVE_MARKERS, name: "alternative", tests: [
+    { input: "Alternatively, we could use a microservice architecture", expected: true },
+    { input: "Another approach would be to use caching", expected: true },
+    { input: "Rather than rebuilding, we could refactor", expected: true },
+    { input: "This is the only viable solution", expected: false },
+  ]},
+];
+for (const group of steelManTests) {
+  for (const t of group.tests) {
+    totalTests++;
+    group.pattern.lastIndex = 0;
+    const result = group.pattern.test(t.input);
+    if (result === t.expected) {
+      passed++;
+      console.log(`  ✅ ${group.name}: "${t.input.substring(0, 50)}"`);
+    } else {
+      failed++;
+      failures.push(`STEEL-MAN [${group.name}]: Expected ${t.expected} for "${t.input}"`);
+      console.log(`  ❌ ${group.name}: FAILED — "${t.input.substring(0, 50)}"`);
+    }
+  }
+}
+
+// Test 7: Claim Source patterns
+console.log("\n─── TEST BLOCK 7: CLAIM SOURCE PATTERNS ───");
+const SOURCE_PATTERNS = {
+  verified: /\b(confirmed|verified|tested|measured|proven|demonstrated|replicated|reproduced|peer.?reviewed|empirically)\b/i,
+  external: /\b(according to|cited? (by|in|from)|paper|journal|study|report|documentation|reference|arXiv|doi:|isbn)\b/i,
+  hypothetical: /\b(hypothes[ie]s|theoretically|in theory|might be|could be|speculat|assum(e|ing|ption)|if we assume|suppose|postulat)\b/i,
+  derived: /\b(therefore|thus|hence|consequently|it follows|derived from|inferred|calculated|computed|implies)\b/i,
+};
+
+const sourceTests = [
+  { category: "verified", input: "This was confirmed and verified through peer-reviewed testing", expected: true },
+  { category: "verified", input: "We measured the latency empirically", expected: true },
+  { category: "external", input: "According to the arXiv paper, this is valid", expected: true },
+  { category: "external", input: "The study from MIT documented this phenomenon", expected: true },
+  { category: "hypothetical", input: "If we assume the hypothesis is correct, theoretically this works", expected: true },
+  { category: "hypothetical", input: "We might speculate that this could be the case", expected: true },
+  { category: "derived", input: "Therefore it follows that this approach implies convergence", expected: true },
+  { category: "derived", input: "Consequently, we inferred the system was compromised", expected: true },
+];
+for (const st of sourceTests) {
+  totalTests++;
+  const pat = SOURCE_PATTERNS[st.category as keyof typeof SOURCE_PATTERNS];
+  pat.lastIndex = 0;
+  const result = pat.test(st.input);
+  if (result === st.expected) {
+    passed++;
+    console.log(`  ✅ ${st.category}: "${st.input.substring(0, 55)}"`);
+  } else {
+    failed++;
+    failures.push(`SOURCE [${st.category}]: Expected ${st.expected} for "${st.input}"`);
+    console.log(`  ❌ ${st.category}: FAILED — "${st.input.substring(0, 55)}"`);
+  }
+}
+
 // ─── SUMMARY ──────
 console.log("\n═══════════════════════════════════════════════════");
 console.log(`  TOTAL: ${totalTests} | PASSED: ${passed} | FAILED: ${failed}`);
