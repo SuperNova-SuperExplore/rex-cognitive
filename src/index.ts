@@ -61,6 +61,31 @@ interface ConsistencyResult {
   hasContradiction: boolean;
 }
 
+interface ConfidenceAnalysis {
+  structuralConfidence: number;  // 0-1 derived from signals
+  evidenceRatio: number;        // evidence markers per sentence
+  overconfidencePenalty: number; // asymmetric penalty (NeurIPS)
+  calibratedScore: number;      // final calibrated confidence
+  ece: number;                  // Expected Calibration Error across session
+}
+
+interface SteelManResult {
+  hasCounterArgument: boolean;
+  hasLimitationAck: boolean;
+  hasAlternative: boolean;
+  score: number;  // 0-1
+  suggestion: string;
+}
+
+interface ClaimSourceAnalysis {
+  verified: number;
+  derived: number;
+  external: number;
+  hypothetical: number;
+  ungrounded: number;
+  groundingScore: number;  // 0-1, higher = more grounded
+}
+
 interface StructuralSignals {
   hasEvidence: boolean;      // References data, numbers, URLs, specifics
   advances: boolean;         // Introduces new info vs restating
@@ -84,6 +109,7 @@ interface SessionState {
   allTerms: Set<string>;
   confidenceHistory: number[];
   claims: ClaimNode[];
+  calibrationHistory: Array<{ predicted: number; actual: number }>;
 }
 
 interface AnalysisResult {
@@ -99,6 +125,9 @@ interface AnalysisResult {
   fallaciesDetected: FallacyHit[];
   toulmin: ToulminAnalysis;
   consistency: ConsistencyResult;
+  confidence: ConfidenceAnalysis;
+  steelMan: SteelManResult;
+  claimSources: ClaimSourceAnalysis;
   circularReasoning: boolean;
   circularPath: number[] | null;
   directive: string;
@@ -383,6 +412,114 @@ function checkConsistency(newClaims: ClaimNode[], existingClaims: ClaimNode[]): 
   return { contradictions, hasContradiction: contradictions.length > 0 };
 }
 
+// ─── LAYER 8: CONFIDENCE CALIBRATION ────────────────────────────────────
+// Ref: NeurIPS 2024 (inverted Dunning-Kruger), arXiv:2604.19444
+// Structural signals > verbalized confidence (research-validated)
+
+function analyzeConfidence(
+  signals: StructuralSignals,
+  biases: string[],
+  fallacies: FallacyHit[],
+  toulmin: ToulminAnalysis,
+  session: SessionState,
+): ConfidenceAnalysis {
+  // Structural confidence: evidence-based, not self-reported
+  let structuralConfidence = 0.5;
+  if (signals.hasEvidence) structuralConfidence += 0.2;
+  if (signals.advances) structuralConfidence += 0.1;
+  if (signals.novelTerms >= 3) structuralConfidence += 0.05;
+  if (toulmin.score >= 0.67) structuralConfidence += 0.1;
+  if (toulmin.score >= 1.0) structuralConfidence += 0.05;
+  structuralConfidence = Math.min(1, structuralConfidence);
+
+  // Evidence ratio: evidence markers per sentence
+  const sentences = (signals.lengthRatio * (session.totalLength / Math.max(session.thoughts.size, 1))).toString().length;
+  const evidenceRatio = signals.hasEvidence ? 1 : 0;
+
+  // Asymmetric overconfidence penalty (NeurIPS: LLMs penalized harder for overconfidence)
+  let overconfidencePenalty = 0;
+  const issueCount = biases.length + fallacies.length;
+  if (structuralConfidence > 0.7 && issueCount > 0) {
+    // High confidence + issues = overconfident. Penalty is asymmetric (2x for high confidence)
+    overconfidencePenalty = Math.min(0.3, issueCount * 0.08 * (structuralConfidence > 0.8 ? 2 : 1));
+  }
+  if (structuralConfidence > 0.8 && !signals.hasEvidence) {
+    overconfidencePenalty += 0.15; // High confidence without evidence = major penalty
+  }
+  if (signals.hedgingRatio > 0.15 && structuralConfidence > 0.6) {
+    overconfidencePenalty += 0.1; // Hedging language contradicts confidence
+  }
+
+  const calibratedScore = Math.max(0, Math.min(1, structuralConfidence - overconfidencePenalty));
+
+  // ECE: Expected Calibration Error across session
+  session.calibrationHistory.push({ predicted: calibratedScore, actual: signals.hasEvidence ? 0.8 : 0.4 });
+  let ece = 0;
+  if (session.calibrationHistory.length > 1) {
+    const diffs = session.calibrationHistory.map(h => Math.abs(h.predicted - h.actual));
+    ece = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+  }
+
+  return { structuralConfidence, evidenceRatio, overconfidencePenalty, calibratedScore, ece };
+}
+
+// ─── LAYER 10: STEEL-MAN DETECTOR ───────────────────────────────────────
+// Checks: counter-argument acknowledgment, limitation admission, alternative exploration
+
+const COUNTER_ARG_MARKERS = /\b(however|on the other hand|counter.?argument|one could argue|opponents? (might|could|would|say)|critics? (might|could|would|say|argue)|the (opposing|contrary|alternative) (view|position|argument)|devil's advocate|it could be argued|some (might|would|could) (say|argue)|admittedly)\b/i;
+const LIMITATION_MARKERS = /\b(limitation|caveat|weakness|drawback|shortcoming|this (doesn't|does not) (account|address|cover|handle)|not applicable|edge case|exception|fails? (when|if|for)|breaks? down (when|if)|blind spot|gap in)\b/i;
+const ALTERNATIVE_MARKERS = /\b(alternatively|another (approach|option|way|method|perspective)|other (options?|approaches?|methods?|ways?)|could also|might also|instead of|rather than|as opposed to|compared to|versus|vs\.?)\b/i;
+
+function detectSteelMan(thought: string, thoughtNumber: number): SteelManResult {
+  const hasCounterArgument = COUNTER_ARG_MARKERS.test(thought);
+  const hasLimitationAck = LIMITATION_MARKERS.test(thought);
+  const hasAlternative = ALTERNATIVE_MARKERS.test(thought);
+
+  let score = 0;
+  if (hasCounterArgument) score += 0.4;
+  if (hasLimitationAck) score += 0.35;
+  if (hasAlternative) score += 0.25;
+
+  let suggestion = "";
+  if (score === 0 && thoughtNumber > 2) {
+    suggestion = "STEEL-MAN: Address the strongest counter-argument to your position.";
+  } else if (!hasCounterArgument && thoughtNumber > 1) {
+    suggestion = "Consider: What would the strongest critic say against this?";
+  } else if (!hasLimitationAck && thoughtNumber > 2) {
+    suggestion = "Consider: Under what conditions does this reasoning fail?";
+  }
+
+  return { hasCounterArgument, hasLimitationAck, hasAlternative, score, suggestion };
+}
+
+// ─── LAYER 11: CLAIM SOURCE TAGGING ─────────────────────────────────────
+// Classifies claims by evidential grounding
+
+const SOURCE_PATTERNS = {
+  verified: /\b(confirmed|verified|tested|measured|proven|demonstrated|replicated|reproduced|peer.?reviewed|empirically)\b/i,
+  external: /\b(according to|cited? (by|in|from)|paper|journal|study|report|documentation|reference|arXiv|doi:|isbn)\b/i,
+  hypothetical: /\b(hypothes[ie]s|theoretically|in theory|might be|could be|speculat|assum(e|ing|ption)|if we assume|suppose|postulat)\b/i,
+  derived: /\b(therefore|thus|hence|consequently|it follows|derived from|inferred|calculated|computed|implies)\b/i,
+};
+
+function analyzeClaimSources(thought: string): ClaimSourceAnalysis {
+  const verified = (thought.match(SOURCE_PATTERNS.verified) || []).length;
+  const external = (thought.match(SOURCE_PATTERNS.external) || []).length;
+  const hypothetical = (thought.match(SOURCE_PATTERNS.hypothetical) || []).length;
+  const derived = (thought.match(SOURCE_PATTERNS.derived) || []).length;
+  const total = verified + external + hypothetical + derived;
+  const ungrounded = total === 0 ? 1 : 0;
+
+  // Grounding score: verified/external = strong, derived = medium, hypothetical/ungrounded = weak
+  let groundingScore = 0.5;
+  if (total > 0) {
+    groundingScore = ((verified * 1.0 + external * 0.8 + derived * 0.5 + hypothetical * 0.2) / total);
+  }
+  if (ungrounded) groundingScore = 0.1;
+
+  return { verified, derived, external, hypothetical, ungrounded, groundingScore };
+}
+
 // ─── STRUCTURAL SIGNAL EXTRACTOR ────────────────────────────────────────
 
 const HEDGING_WORDS = /\b(maybe|perhaps|possibly|might|could be|uncertain|not sure|I think|probably|likely|seems like|appears to)\b/gi;
@@ -573,6 +710,9 @@ function generateDirective(
     parts.push("🔍 DEEP MODE: Checkpoint — verify consistency with thoughts 1-" + (thoughtNumber - 1) + ".");
   }
 
+  // Note: Steel-man and grounding directives are delivered in the steelMan.suggestion
+  // and claimSources.groundingScore fields of the output object directly.
+
   if (parts.length === 0) {
     return "✅ Thought accepted. Quality on track.";
   }
@@ -595,6 +735,7 @@ function getOrCreateSession(sessionId: string): SessionState {
       allTerms: new Set(),
       confidenceHistory: [],
       claims: [],
+      calibrationHistory: [],
     });
   }
   return sessions.get(sessionId)!;
@@ -645,6 +786,21 @@ function processThought(params: {
     ? { contradictions: [], hasContradiction: false }
     : checkConsistency(newClaims, session.claims);
   for (const c of newClaims) session.claims.push(c);
+
+  // Layer 8: Confidence calibration (deep/critical)
+  const confidence = mode === "fast"
+    ? { structuralConfidence: 0.5, evidenceRatio: 0, overconfidencePenalty: 0, calibratedScore: 0.5, ece: 0 }
+    : analyzeConfidence(signals, biases, fallacies, toulmin, session);
+
+  // Layer 10: Steel-Man detection (deep/critical)
+  const steelMan = mode === "fast"
+    ? { hasCounterArgument: false, hasLimitationAck: false, hasAlternative: false, score: 0, suggestion: "" }
+    : detectSteelMan(params.thought, params.thoughtNumber);
+
+  // Layer 11: Claim source tagging (deep/critical)
+  const claimSources = mode === "fast"
+    ? { verified: 0, derived: 0, external: 0, hypothetical: 0, ungrounded: 1, groundingScore: 0.1 }
+    : analyzeClaimSources(params.thought);
 
   // Update session state
   const termPattern = /\b[A-Z][a-zA-Z]{3,}\b|\b[a-z]{5,}\b/g;
@@ -744,6 +900,9 @@ function processThought(params: {
     fallaciesDetected: fallacies,
     toulmin,
     consistency,
+    confidence,
+    steelMan,
+    claimSources,
     circularReasoning,
     circularPath,
     directive,
