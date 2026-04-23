@@ -1,6 +1,6 @@
 {
   "name": "rex-cognitive-engine",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "REX Cognitive Engine — Cuba-thinking quality at sequential-thinking speed",
   "type": "module",
   "main": "dist/index.js",

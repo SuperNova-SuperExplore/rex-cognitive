@@ -183,13 +183,13 @@ const FALLACY_PATTERNS: Array<{ name: string; category: string; pattern: RegExp;
   // APPEAL FALLACIES
   { name: "APPEAL_TO_AUTHORITY", category: "appeal", pattern: /\b(expert says?.{0,15}(so|therefore|must)|because.{0,20}(said so|says? so|authority)|according to.{0,20}(must be|is definitely))/i, description: "Uncritical deference to authority" },
   { name: "APPEAL_TO_EMOTION", category: "appeal", pattern: /\b(think of the (children|victims|families)|how would you feel|imagine (if|the suffering)|won't (someone|anybody) think)/i, description: "Substituting emotional appeal for evidence" },
-  { name: "APPEAL_TO_NATURE", category: "appeal", pattern: /\b(natural.{0,15}(therefore|so|thus).{0,15}(good|right|better|healthy|safe)|unnatural.{0,15}(bad|wrong|harmful|dangerous))/i, description: "Equating natural with good" },
+  { name: "APPEAL_TO_NATURE", category: "appeal", pattern: /\b(natural.{0,30}(therefore|so|thus).{0,20}(good|right|better|healthy|safe)|unnatural.{0,20}(bad|wrong|harmful|dangerous))/i, description: "Equating natural with good" },
   { name: "APPEAL_TO_TRADITION", category: "appeal", pattern: /\b(always been (this|that|done) way|tradition.{0,15}(therefore|so|thus)|we've always|that's how (it's|we've) always)/i, description: "Appealing to tradition over evidence" },
   { name: "APPEAL_TO_POPULARITY", category: "appeal", pattern: /\b(millions?.{0,15}can't be wrong|everyone (does|believes|knows|agrees)|most people (think|believe|agree)|popular.{0,10}(therefore|so|must))/i, description: "Popularity doesn't equal truth" },
-  { name: "APPEAL_TO_NOVELTY", category: "appeal", pattern: /\b(new.{0,10}(therefore|so|must be).{0,10}(better|superior)|latest.{0,10}(must|is).{0,10}(best|better)|old.{0,10}(therefore|so).{0,10}(bad|obsolete))/i, description: "Equating newness with superiority" },
+  { name: "APPEAL_TO_NOVELTY", category: "appeal", pattern: /\b(new.{0,15}(therefore|so|thus|must be|is).{0,15}(better|superior|best)|latest.{0,15}(must|is|means).{0,10}(best|better|superior)|older?.{0,10}(therefore|so|thus|means).{0,15}(bad|obsolete|outdated|inferior)|newer.{0,10}(is|means).{0,10}(better|best))/i, description: "Equating newness with superiority" },
   // STRUCTURAL (ADVANCED)
   { name: "TU_QUOQUE", category: "structural", pattern: /\b(you (also|too|yourself)|hypocrit|practice what you preach|but you (did|do|said))/i, description: "Deflecting by accusing opponent of same thing" },
-  { name: "GENETIC_FALLACY", category: "structural", pattern: /\b(originat.{0,20}(therefore|so|thus).{0,15}(bad|wrong|invalid|flawed)|source.{0,15}(discredits?|invalidates?))/i, description: "Judging argument by its origin, not merit" },
+  { name: "GENETIC_FALLACY", category: "structural", pattern: /\b(originat.{0,30}(therefore|so|thus).{0,20}(bad|wrong|invalid|flawed)|source.{0,20}(discredits?|invalidates?))/i, description: "Judging argument by its origin, not merit" },
   { name: "COMPOSITION", category: "structural", pattern: /\b(part is.{0,15}therefore.{0,10}whole|each.{0,15}(is|are).{0,15}therefore.{0,10}(all|whole|entire|group))/i, description: "Assuming part properties apply to whole" },
   { name: "DIVISION", category: "structural", pattern: /\b(whole is.{0,15}therefore.{0,10}(part|each|every)|group.{0,15}(is|are).{0,15}therefore.{0,10}(each|every|individual))/i, description: "Assuming whole properties apply to parts" },
   { name: "LOADED_QUESTION", category: "structural", pattern: /\b(when did you stop|have you stopped|why do you (still|always|keep)|do you still (beat|abuse|cheat))/i, description: "Question presupposes unproven claim" },
@@ -293,23 +293,41 @@ const CLAIM_EXTRACTORS = [
 ];
 
 const NEGATION_PAIRS: Array<[RegExp, RegExp]> = [
+  // Modal negations
   [/\bis\b/i, /\bis\s+not\b/i],
   [/\bcan\b/i, /\bcannot\b/i],
   [/\bshould\b/i, /\bshould\s*not\b/i],
   [/\bwill\b/i, /\bwill\s*not\b/i],
+  // Boolean antonyms
   [/\btrue/i, /\bfalse/i],
   [/\bpossible/i, /\bimpossible/i],
   [/\bvalid/i, /\binvalid/i],
   [/\bcorrect/i, /\bincorrect/i],
+  // Quality antonyms
   [/\beffective/i, /\bineffective/i],
   [/\breliable/i, /\bunreliable/i],
   [/\bsafe/i, /\bunsafe/i],
   [/\bsufficient/i, /\binsufficient/i],
   [/\bnecessary/i, /\bunnecessary/i],
+  [/\bsuitable/i, /\bunsuitable/i],
+  [/\badequate/i, /\binadequate/i],
+  [/\bstable/i, /\bunstable/i],
+  [/\bsecure/i, /\binsecure/i],
+  [/\bconsistent/i, /\binconsistent/i],
+  // Directional antonyms
   [/\bsuccess/i, /\bfailure/i],
   [/\bincreas/i, /\bdecreas/i],
   [/\bbetter/i, /\bworse/i],
   [/\bmore/i, /\bless\b/i],
+  [/\bfast/i, /\bslow/i],
+  [/\bstrong/i, /\bweak/i],
+  [/\bgood/i, /\bbad\b/i],
+  [/\bhigh/i, /\blow\b/i],
+  // Cross-pair semantic opposites (reliable↔ineffective, effective↔unreliable)
+  [/\breliable/i, /\bineffective/i],
+  [/\beffective/i, /\bunreliable/i],
+  [/\bsuitable/i, /\bineffective/i],
+  [/\bsuitable/i, /\bunreliable/i],
 ];
 
 function extractClaims(thought: string, thoughtId: number): ClaimNode[] {
@@ -368,7 +386,7 @@ function checkConsistency(newClaims: ClaimNode[], existingClaims: ClaimNode[]): 
 // ─── STRUCTURAL SIGNAL EXTRACTOR ────────────────────────────────────────
 
 const HEDGING_WORDS = /\b(maybe|perhaps|possibly|might|could be|uncertain|not sure|I think|probably|likely|seems like|appears to)\b/gi;
-const EVIDENCE_MARKERS = /\b(because|evidence|data shows|according to|measured|tested|confirmed|verified|result:|proof|CVE-|0x[0-9a-f]+|\d+\.\d+\.\d+|https?:\/\/|port \d+|\d+%)\b/gi;
+const EVIDENCE_MARKERS = /\b(because|evidence|data shows?|according to|measured|tested|confirmed|verified|result:|proof|CVE-|0x[0-9a-f]+|\d+\.\d+\.\d+|https?:\/\/|port \d+|\d+%|\d+ms|\d+k\b|p\d{2,3}|benchmark|study|research|experiment|survey|found that|shows? that|demonstrates?|indicates?|\d+ (users?|requests?|seconds?|bytes?|connections?|samples?))\b/gi;
 
 function extractSignals(thought: string, session: SessionState): StructuralSignals {
   // Evidence detection
