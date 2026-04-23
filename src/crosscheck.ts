@@ -9,9 +9,9 @@
 const FALLACY_PATTERNS = [
   { name: "AD_HOMINEM", category: "structural", pattern: /\b(attack|discredit|insult).{0,30}(person|character|motive|credib)/i, test: "We should attack and discredit the person making this claim" },
   { name: "STRAW_MAN", category: "structural", pattern: /\b(they|opponents?|critics?)\s+(said|claim|argue|believe).{0,40}(but actually|but really|in reality|when really)/i, test: "Critics claim the system works but actually it fails constantly" },
-  { name: "FALSE_DICHOTOMY", category: "structural", pattern: /\b(either\s+.{3,30}\s+or\b|only two (options|choices|ways)|no (middle ground|other option|alternative))/i, test: "Either we adopt this or we fail — no other option exists" },
+  { name: "FALSE_DICHOTOMY", category: "structural", pattern: /\b(either\s+(?!there\s+(exist|is|are|was))(?!.{0,30}\bor\s+(it\s+)?(does|doesn't|doesn't|is|isn't|isn't)).{3,30}\s+or\b|only two (options|choices|ways)|no (middle ground|other option|alternative))/i, test: "Either we adopt this or we fail — no other option exists" },
   { name: "SLIPPERY_SLOPE", category: "structural", pattern: /\b(if we (allow|accept|start)|once we|this will (lead|inevitably|eventually)).{0,40}(then|eventually|lead to|result in|end up)/i, test: "If we allow this change then it will eventually lead to total collapse" },
-  { name: "CIRCULAR_REASONING", category: "structural", pattern: /\b(true because.{0,30}true|right because.{0,30}right|is\s+\w+\s+because\s+it\s+is\s+\w+)/i, test: "This is correct because it is correct" },
+  { name: "CIRCULAR_REASONING", category: "structural", pattern: /\b(true because.{0,30}true|right because.{0,30}right|is\s+(\w+)\s+because\s+it\s+is\s+\2)/i, test: "This is correct because it is correct" },
   { name: "EQUIVOCATION", category: "structural", pattern: /\b(in (one|another|a different) sense|depends on.{0,20}(definition|meaning)|redefin)/i, test: "In one sense the word means X but in another sense it means Y" },
   { name: "RED_HERRING", category: "structural", pattern: /\b(but what about|changing the subject|more importantly|the real issue|let's not forget that)/i, test: "But what about the other team's failures?" },
   { name: "NON_SEQUITUR", category: "structural", pattern: /\b(therefore|thus|hence|so)\b.{5,60}\b(which has nothing|unrelated|doesn't follow)/i, test: "Therefore we should buy pizza, which has nothing to do with the budget" },
@@ -443,6 +443,71 @@ for (const rt of routerTests) {
     const reason = !primaryOk ? `primary=${result.primary}` : !includeOk ? `missing ${rt.mustInclude}` : `unwanted ${rt.mustExclude}`;
     failures.push(`ROUTER: Expected ${rt.expectedPrimary} (${reason}) for "${rt.input.substring(0, 60)}"`);
     console.log(`  ❌ ${rt.expectedPrimary}: FAILED (${reason}) — "${rt.input.substring(0, 55)}"`);
+  }
+}
+
+// ─── TEST BLOCK 9: FALSE POSITIVE REGRESSION ───
+console.log("\n─── TEST BLOCK 9: FALSE POSITIVE REGRESSION ───");
+const fpRegressionTests = [
+  {
+    input: "Either there exists such an n, or there doesn't — this is the law of excluded middle in mathematics.",
+    mustNotFlag: "FALSE_DICHOTOMY",
+    label: "Mathematical excluded middle (Gödel proof)",
+  },
+  {
+    input: "G is meaningless because it is self-referential, they argue.",
+    mustNotFlag: "CIRCULAR_REASONING",
+    label: "Quoted opponent attack (different adjectives)",
+  },
+  {
+    input: "Either the hash matches or it doesn't — binary verification.",
+    mustNotFlag: "FALSE_DICHOTOMY",
+    label: "Binary computation check",
+  },
+  {
+    input: "This is valid because it is valid and we know it.",
+    mustFlag: "CIRCULAR_REASONING",
+    label: "Actual circular reasoning (same word)",
+  },
+  {
+    input: "Either you support us or you support the enemy — there's no middle ground.",
+    mustFlag: "FALSE_DICHOTOMY",
+    label: "Actual false dichotomy",
+  },
+];
+
+for (const fpt of fpRegressionTests) {
+  totalTests++;
+  let flagged = false;
+  const target = fpt.mustNotFlag || fpt.mustFlag || "";
+  for (const f of FALLACY_PATTERNS) {
+    if (f.name === target) {
+      f.pattern.lastIndex = 0;
+      if (f.pattern.test(fpt.input)) flagged = true;
+      break;
+    }
+  }
+
+  if (fpt.mustNotFlag) {
+    // Should NOT be flagged
+    if (!flagged) {
+      passed++;
+      console.log(`  ✅ No false positive: "${fpt.label}"`);
+    } else {
+      failed++;
+      failures.push(`FP REGRESSION: ${fpt.mustNotFlag} fired on "${fpt.label}"`);
+      console.log(`  ❌ False positive: ${fpt.mustNotFlag} on "${fpt.label}"`);
+    }
+  } else if (fpt.mustFlag) {
+    // SHOULD be flagged
+    if (flagged) {
+      passed++;
+      console.log(`  ✅ Correctly flagged: "${fpt.label}"`);
+    } else {
+      failed++;
+      failures.push(`FP REGRESSION: ${fpt.mustFlag} should fire on "${fpt.label}"`);
+      console.log(`  ❌ Missed: ${fpt.mustFlag} on "${fpt.label}"`);
+    }
   }
 }
 
