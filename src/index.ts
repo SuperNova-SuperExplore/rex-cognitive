@@ -139,6 +139,14 @@ interface AnalysisResult {
   confidence: ConfidenceAnalysis;
   steelMan: SteelManResult;
   claimSources: ClaimSourceAnalysis;
+  computation: {
+    arithmeticChecks: ArithmeticCheck[];
+    validSteps: number;
+    invalidSteps: number;
+    hasNumericalInconsistency: boolean;
+    stepChainValid: boolean;
+    computationScore: number;
+  } | null;
   circularReasoning: boolean;
   circularPath: number[] | null;
   directive: string;
@@ -531,6 +539,178 @@ function checkConsistency(newClaims: ClaimNode[], existingClaims: ClaimNode[]): 
   }
 
   return { contradictions, hasContradiction: contradictions.length > 0 };
+}
+
+// ─── COMPUTATION PIPELINE ───────────────────────────────────────────────
+// Fires only when domain includes "computation"
+// Sub-layers: Arithmetic Verifier, Step Chain Validator, Numerical Consistency
+
+interface ArithmeticCheck {
+  expression: string;
+  lhs: string;
+  rhs: string;
+  expected: number | null;
+  actual: number | null;
+  valid: boolean | null;  // null = couldn't evaluate
+}
+
+interface ComputationAnalysis {
+  arithmeticChecks: ArithmeticCheck[];
+  validSteps: number;
+  invalidSteps: number;
+  numericalValues: Map<string, number[]>;  // track values per variable
+  hasNumericalInconsistency: boolean;
+  stepChainValid: boolean;
+  computationScore: number;  // 0-1
+}
+
+// Safe arithmetic evaluator (no eval())
+function safeEvaluate(expr: string): number | null {
+  try {
+    // Clean the expression
+    const cleaned = expr.replace(/,/g, "").replace(/\s/g, "").replace(/×/g, "*").replace(/÷/g, "/");
+    // Only allow digits, operators, parens, dots
+    if (!/^[\d\+\-\*\/\(\)\.\s]+$/.test(cleaned)) return null;
+    // Tokenize and evaluate using shunting-yard (simplified)
+    return shuntingYard(cleaned);
+  } catch {
+    return null;
+  }
+}
+
+function shuntingYard(expr: string): number | null {
+  const output: number[] = [];
+  const ops: string[] = [];
+  const prec: Record<string, number> = { "+": 1, "-": 1, "*": 2, "/": 2 };
+
+  const tokens = expr.match(/(\d+\.?\d*|[\+\-\*\/\(\)])/g);
+  if (!tokens) return null;
+
+  for (const token of tokens) {
+    if (/^\d/.test(token)) {
+      output.push(parseFloat(token));
+    } else if ("+-*/".includes(token)) {
+      while (ops.length && ops[ops.length - 1] !== "(" && (prec[ops[ops.length - 1]] || 0) >= (prec[token] || 0)) {
+        const op = ops.pop()!;
+        if (output.length < 2) return null;
+        const b = output.pop()!;
+        const a = output.pop()!;
+        output.push(applyOp(a, b, op));
+      }
+      ops.push(token);
+    } else if (token === "(") {
+      ops.push(token);
+    } else if (token === ")") {
+      while (ops.length && ops[ops.length - 1] !== "(") {
+        const op = ops.pop()!;
+        if (output.length < 2) return null;
+        const b = output.pop()!;
+        const a = output.pop()!;
+        output.push(applyOp(a, b, op));
+      }
+      ops.pop(); // remove "("
+    }
+  }
+  while (ops.length) {
+    const op = ops.pop()!;
+    if (output.length < 2) return null;
+    const b = output.pop()!;
+    const a = output.pop()!;
+    output.push(applyOp(a, b, op));
+  }
+  return output.length === 1 ? output[0] : null;
+}
+
+function applyOp(a: number, b: number, op: string): number {
+  switch (op) {
+    case "+": return a + b;
+    case "-": return a - b;
+    case "*": return a * b;
+    case "/": return b !== 0 ? a / b : NaN;
+    default: return NaN;
+  }
+}
+
+// Pattern: "expr = number" (e.g., "5*3 - 2 = 13", "49649 * 801 = 39768849")
+const ARITHMETIC_EXPR = /(\d[\d\s\*\+\-\/\(\),×÷\.]*\d)\s*=\s*(\d[\d,\.]*)/g;
+
+function analyzeComputation(thought: string): ComputationAnalysis {
+  const arithmeticChecks: ArithmeticCheck[] = [];
+  const numericalValues = new Map<string, number[]>();
+  let validSteps = 0;
+  let invalidSteps = 0;
+
+  // 1. Find and verify arithmetic expressions
+  let match;
+  ARITHMETIC_EXPR.lastIndex = 0;
+  while ((match = ARITHMETIC_EXPR.exec(thought)) !== null) {
+    const lhs = match[1].trim();
+    const rhs = match[2].trim().replace(/,/g, "");
+    const expected = parseFloat(rhs);
+    const actual = safeEvaluate(lhs);
+
+    let valid: boolean | null = null;
+    if (actual !== null && !isNaN(expected)) {
+      valid = Math.abs(actual - expected) < 0.001;
+      if (valid) validSteps++;
+      else invalidSteps++;
+    }
+
+    arithmeticChecks.push({ expression: `${lhs} = ${rhs}`, lhs, rhs, expected, actual, valid });
+  }
+
+  // 2. Track numerical values assigned to variables (f(n) = X pattern)
+  const varAssignments = thought.matchAll(/\b([a-zA-Z]\w*)\s*\(?\s*(\d+)\s*\)?\s*=\s*(\d[\d,\.]*)/g);
+  for (const vm of varAssignments) {
+    const varName = `${vm[1]}(${vm[2]})`;
+    const value = parseFloat(vm[3].replace(/,/g, ""));
+    if (!numericalValues.has(varName)) numericalValues.set(varName, []);
+    numericalValues.get(varName)!.push(value);
+  }
+
+  // 3. Check numerical consistency (same variable with different values)
+  let hasNumericalInconsistency = false;
+  for (const [, values] of numericalValues) {
+    if (values.length > 1) {
+      const unique = new Set(values);
+      if (unique.size > 1) hasNumericalInconsistency = true;
+    }
+  }
+
+  // 4. Step chain validation — are results from one step used in the next?
+  const allNumbers = [...thought.matchAll(/\b(\d{2,})\b/g)].map(m => parseFloat(m[1]));
+  let stepChainValid = true;
+  if (arithmeticChecks.length >= 2) {
+    // Check if result of step N appears in step N+1
+    for (let i = 0; i < arithmeticChecks.length - 1; i++) {
+      const resultStr = arithmeticChecks[i].rhs;
+      const nextExpr = arithmeticChecks[i + 1].lhs;
+      if (!nextExpr.includes(resultStr)) {
+        // Not necessarily invalid, but note it
+        stepChainValid = false;
+      }
+    }
+  }
+
+  // Compute score
+  const totalChecks = arithmeticChecks.length;
+  let computationScore = 0.5; // baseline
+  if (totalChecks > 0) {
+    computationScore = validSteps / totalChecks;
+  }
+  if (hasNumericalInconsistency) computationScore -= 0.2;
+  if (!stepChainValid && totalChecks > 1) computationScore -= 0.1;
+  computationScore = Math.max(0, Math.min(1, computationScore));
+
+  return {
+    arithmeticChecks,
+    validSteps,
+    invalidSteps,
+    numericalValues,
+    hasNumericalInconsistency,
+    stepChainValid,
+    computationScore,
+  };
 }
 
 // ─── LAYER 8: CONFIDENCE CALIBRATION ────────────────────────────────────
@@ -927,6 +1107,18 @@ function processThought(params: {
     ? { verified: 0, derived: 0, external: 0, hypothetical: 0, ungrounded: 1, groundingScore: 0.1 }
     : analyzeClaimSources(params.thought);
 
+  // Computation Pipeline — COMPUTATION domain only
+  const isComp = domains.active.includes("computation");
+  const computationRaw = (mode === "fast" || !isComp) ? null : analyzeComputation(params.thought);
+  const computation = computationRaw ? {
+    arithmeticChecks: computationRaw.arithmeticChecks,
+    validSteps: computationRaw.validSteps,
+    invalidSteps: computationRaw.invalidSteps,
+    hasNumericalInconsistency: computationRaw.hasNumericalInconsistency,
+    stepChainValid: computationRaw.stepChainValid,
+    computationScore: computationRaw.computationScore,
+  } : null;
+
   // Update session state
   const termPattern = /\b[A-Z][a-zA-Z]{3,}\b|\b[a-z]{5,}\b/g;
   const currentTerms = (params.thought.match(termPattern) || []).map(t => t.toLowerCase());
@@ -1029,6 +1221,7 @@ function processThought(params: {
     confidence,
     steelMan,
     claimSources,
+    computation,
     circularReasoning,
     circularPath,
     directive,
