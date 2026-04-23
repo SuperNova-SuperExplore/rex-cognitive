@@ -86,6 +86,16 @@ interface ClaimSourceAnalysis {
   groundingScore: number;  // 0-1, higher = more grounded
 }
 
+// ─── LAYER 0: COGNITIVE DOMAIN TYPES ────────────────────────────────────
+
+type CognitiveDomain = "argumentation" | "computation" | "prediction" | "psychology" | "game_theory" | "general";
+
+interface DomainClassification {
+  primary: CognitiveDomain;
+  active: CognitiveDomain[];       // all domains above threshold
+  scores: Record<CognitiveDomain, number>;  // 0-1 confidence per domain
+}
+
 interface StructuralSignals {
   hasEvidence: boolean;      // References data, numbers, URLs, specifics
   advances: boolean;         // Introduces new info vs restating
@@ -117,6 +127,7 @@ interface AnalysisResult {
   totalThoughts: number;
   nextThoughtNeeded: boolean;
   mode: string;
+  domains: DomainClassification;
   ewmaScore: number;
   qualityScore: number;
   signals: StructuralSignals;
@@ -132,6 +143,116 @@ interface AnalysisResult {
   circularPath: number[] | null;
   directive: string;
   graphStats: { nodes: number; edges: number; branches: number; merges: number };
+}
+
+// ─── LAYER 0: COGNITIVE ROUTER ──────────────────────────────────────────
+// Classifies thought into domain(s) via keyword signal scoring. Zero ML.
+// Multi-domain: a thought can activate multiple pipelines simultaneously.
+
+interface DomainSignal {
+  domain: CognitiveDomain;
+  keywords: RegExp[];
+  weight: number;
+}
+
+const DOMAIN_SIGNALS: DomainSignal[] = [
+  {
+    domain: "argumentation",
+    keywords: [
+      /\b(argu(e|ment|ing)|debate|claim|position|stance|refut|counter.?argument|opponents?|critics?)\b/i,
+      /\b(fallacy|premise|conclusion|evidence supports?|therefore.{0,20}should)\b/i,
+      /\b(persuade|convince|justify|defend|advocate|oppose|rebuttal)\b/i,
+    ],
+    weight: 1.0,
+  },
+  {
+    domain: "computation",
+    keywords: [
+      /\b(calculat|comput|solve|equation|formula|proof|theorem|recurrence)\b/i,
+      /\b(f\(\d\)|x\s*[=<>]|sum|product|integral|derivative|factorial)\b/i,
+      /\d+\s*[\+\-\*\/\^]\s*\d+/,
+      /\b(verif(y|ied|ication).{0,15}(math|computation|arithmetic|answer|result))\b/i,
+      /\b(matrix|vector|determinant|eigenvalue|polynomial)\b/i,
+    ],
+    weight: 1.0,
+  },
+  {
+    domain: "prediction",
+    keywords: [
+      /\b(predict|forecast|probabilit|likely|unlikely|estimat|projection)\b/i,
+      /\b(bayesian|prior|posterior|confidence interval|margin of error)\b/i,
+      /\b(trend|correlation|regression|model|extrapolat|interpolat)\b/i,
+      /\b(\d+%\s*(chance|probability|likelihood)|odds|expected value)\b/i,
+    ],
+    weight: 0.9,
+  },
+  {
+    domain: "psychology",
+    keywords: [
+      /\b(cognitive|behavioral|heuristic|framing|anchoring|nudge)\b/i,
+      /\b(motivation|emotion|perception|decision.?making|irrational)\b/i,
+      /\b(Kahneman|Tversky|System [12]|prospect theory|loss aversion|sunk cost)\b/i,
+      /\b(personality|attachment|conditioning|reinforcement|Pavlov|Skinner)\b/i,
+    ],
+    weight: 0.8,
+  },
+  {
+    domain: "game_theory",
+    keywords: [
+      /\b(strateg(y|ic|ies)|payoff|equilibrium|Nash|minimax|dominant|dominated)\b/i,
+      /\b(zero.?sum|prisoner.?s? dilemma|cooperative|non.?cooperative)\b/i,
+      /\b(player [12AB]|opponent|bluff|signal|commit|defect|cooperate)\b/i,
+      /\b(Pareto|mixed strategy|pure strategy|best response|game tree)\b/i,
+    ],
+    weight: 0.9,
+  },
+];
+
+const DOMAIN_THRESHOLD = 0.3;
+
+function classifyDomain(thought: string): DomainClassification {
+  const scores: Record<CognitiveDomain, number> = {
+    argumentation: 0,
+    computation: 0,
+    prediction: 0,
+    psychology: 0,
+    game_theory: 0,
+    general: 0.15,  // baseline — always present as fallback
+  };
+
+  for (const signal of DOMAIN_SIGNALS) {
+    let hits = 0;
+    for (const kw of signal.keywords) {
+      kw.lastIndex = 0;
+      if (kw.test(thought)) hits++;
+    }
+    if (hits > 0) {
+      // Score = (matched keywords / total keywords) * weight, capped at 1.0
+      scores[signal.domain] = Math.min(1.0, (hits / signal.keywords.length) * signal.weight);
+    }
+  }
+
+  // Collect active domains (above threshold)
+  const active: CognitiveDomain[] = [];
+  let maxDomain: CognitiveDomain = "general";
+  let maxScore = scores.general;
+
+  for (const [domain, score] of Object.entries(scores) as [CognitiveDomain, number][]) {
+    if (score >= DOMAIN_THRESHOLD) {
+      active.push(domain);
+    }
+    if (score > maxScore) {
+      maxScore = score;
+      maxDomain = domain;
+    }
+  }
+
+  // If no domain crossed threshold, default to general
+  if (active.length === 0) {
+    active.push("general");
+  }
+
+  return { primary: maxDomain, active, scores };
 }
 
 // ─── BIAS DETECTOR ──────────────────────────────────────────────────────
@@ -760,6 +881,10 @@ function processThought(params: {
   const sessionId = params.sessionId || "default";
   const session = getOrCreateSession(sessionId);
 
+  // ─── LAYER 0: Cognitive Router (always runs first) ───
+  const domains = classifyDomain(params.thought);
+  const isArg = domains.active.includes("argumentation");
+
   // Extract structural signals
   const signals = extractSignals(params.thought, session);
 
@@ -769,35 +894,35 @@ function processThought(params: {
   // Update EWMA
   session.ewma = updateEWMA(session.ewma, qualityScore);
 
-  // Detect biases (skip in fast mode)
-  const biases = mode === "fast" ? [] : detectBiases(params.thought);
+  // Layer 4: Detect biases (ARGUMENTATION only, skip in fast)
+  const biases = (mode === "fast" || !isArg) ? [] : detectBiases(params.thought);
 
-  // Layer 6: Fallacy detection (deep/critical)
-  const fallacies = mode === "fast" ? [] : detectFallacies(params.thought);
+  // Layer 6: Fallacy detection (ARGUMENTATION only, deep/critical)
+  const fallacies = (mode === "fast" || !isArg) ? [] : detectFallacies(params.thought);
 
-  // Layer 7: Toulmin completeness (deep/critical)
-  const toulmin = mode === "fast"
+  // Layer 7: Toulmin completeness (ARGUMENTATION only, deep/critical)
+  const toulmin = (mode === "fast" || !isArg)
     ? { claim: true, data: true, warrant: true, backing: true, qualifier: true, rebuttal: true, score: 1, missing: [], criticalQuestions: [] }
     : analyzeToulmin(params.thought);
 
-  // Layer 9: Consistency checking — extract claims + check vs history
+  // Layer 9: Consistency checking — UNIVERSAL (always runs)
   const newClaims = mode === "fast" ? [] : extractClaims(params.thought, params.thoughtNumber);
   const consistency = mode === "fast"
     ? { contradictions: [], hasContradiction: false }
     : checkConsistency(newClaims, session.claims);
   for (const c of newClaims) session.claims.push(c);
 
-  // Layer 8: Confidence calibration (deep/critical)
+  // Layer 8: Confidence calibration — UNIVERSAL (always runs)
   const confidence = mode === "fast"
     ? { structuralConfidence: 0.5, evidenceRatio: 0, overconfidencePenalty: 0, calibratedScore: 0.5, ece: 0 }
     : analyzeConfidence(signals, biases, fallacies, toulmin, session);
 
-  // Layer 10: Steel-Man detection (deep/critical)
-  const steelMan = mode === "fast"
+  // Layer 10: Steel-Man detection (ARGUMENTATION only, deep/critical)
+  const steelMan = (mode === "fast" || !isArg)
     ? { hasCounterArgument: false, hasLimitationAck: false, hasAlternative: false, score: 0, suggestion: "" }
     : detectSteelMan(params.thought, params.thoughtNumber);
 
-  // Layer 11: Claim source tagging (deep/critical)
+  // Layer 11: Claim source tagging — UNIVERSAL (always runs)
   const claimSources = mode === "fast"
     ? { verified: 0, derived: 0, external: 0, hypothetical: 0, ungrounded: 1, groundingScore: 0.1 }
     : analyzeClaimSources(params.thought);
@@ -891,6 +1016,7 @@ function processThought(params: {
     totalThoughts: params.totalThoughts,
     nextThoughtNeeded: params.nextThoughtNeeded,
     mode,
+    domains,
     ewmaScore: Math.round(session.ewma * 1000) / 1000,
     qualityScore: Math.round(qualityScore * 1000) / 1000,
     signals,
