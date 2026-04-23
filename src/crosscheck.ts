@@ -335,6 +335,117 @@ for (const st of sourceTests) {
   }
 }
 
+// ─── Phase 3: Cognitive Router Tests ──────
+
+console.log("\n─── TEST BLOCK 8: COGNITIVE ROUTER ───");
+
+type CognitiveDomain = "argumentation" | "computation" | "prediction" | "psychology" | "game_theory" | "general";
+
+interface DomainSignal {
+  domain: CognitiveDomain;
+  keywords: RegExp[];
+  weight: number;
+}
+
+const DOMAIN_SIGNALS: DomainSignal[] = [
+  {
+    domain: "argumentation",
+    keywords: [
+      /\b(argu(e|ment|ing)|debate|claim|position|stance|refut|counter.?argument|opponents?|critics?)\b/i,
+      /\b(fallacy|premise|conclusion|evidence supports?|therefore.{0,20}should)\b/i,
+      /\b(persuade|convince|justify|defend|advocate|oppose|rebuttal)\b/i,
+    ],
+    weight: 1.0,
+  },
+  {
+    domain: "computation",
+    keywords: [
+      /\b(calculat|comput|solve|equation|formula|proof|theorem|recurrence)\b/i,
+      /\b(f\(\d\)|x\s*[=<>]|sum|product|integral|derivative|factorial)\b/i,
+      /\d+\s*[\+\-\*\/\^]\s*\d+/,
+      /\b(verif(y|ied|ication).{0,15}(math|computation|arithmetic|answer|result))\b/i,
+      /\b(matrix|vector|determinant|eigenvalue|polynomial)\b/i,
+    ],
+    weight: 1.0,
+  },
+  {
+    domain: "prediction",
+    keywords: [
+      /\b(predict|forecast|probabilit|likely|unlikely|estimat|projection)\b/i,
+      /\b(bayesian|prior|posterior|confidence interval|margin of error)\b/i,
+      /\b(trend|correlation|regression|model|extrapolat|interpolat)\b/i,
+      /\b(\d+%\s*(chance|probability|likelihood)|odds|expected value)\b/i,
+    ],
+    weight: 0.9,
+  },
+  {
+    domain: "psychology",
+    keywords: [
+      /\b(cognitive|behavioral|heuristic|framing|anchoring|nudge)\b/i,
+      /\b(motivation|emotion|perception|decision.?making|irrational)\b/i,
+      /\b(Kahneman|Tversky|System [12]|prospect theory|loss aversion|sunk cost)\b/i,
+      /\b(personality|attachment|conditioning|reinforcement|Pavlov|Skinner)\b/i,
+    ],
+    weight: 0.8,
+  },
+  {
+    domain: "game_theory",
+    keywords: [
+      /\b(strateg(y|ic|ies)|payoff|equilibrium|Nash|minimax|dominant|dominated)\b/i,
+      /\b(zero.?sum|prisoner.?s? dilemma|cooperative|non.?cooperative)\b/i,
+      /\b(player [12AB]|opponent|bluff|signal|commit|defect|cooperate)\b/i,
+      /\b(Pareto|mixed strategy|pure strategy|best response|game tree)\b/i,
+    ],
+    weight: 0.9,
+  },
+];
+
+function testClassifyDomain(thought: string): { primary: CognitiveDomain; active: CognitiveDomain[] } {
+  const scores: Record<CognitiveDomain, number> = { argumentation: 0, computation: 0, prediction: 0, psychology: 0, game_theory: 0, general: 0.15 };
+  for (const signal of DOMAIN_SIGNALS) {
+    let hits = 0;
+    for (const kw of signal.keywords) { kw.lastIndex = 0; if (kw.test(thought)) hits++; }
+    if (hits > 0) scores[signal.domain] = Math.min(1.0, (hits / signal.keywords.length) * signal.weight);
+  }
+  const active: CognitiveDomain[] = [];
+  let maxDomain: CognitiveDomain = "general";
+  let maxScore = scores.general;
+  for (const [domain, score] of Object.entries(scores) as [CognitiveDomain, number][]) {
+    if (score >= 0.3) active.push(domain);
+    if (score > maxScore) { maxScore = score; maxDomain = domain; }
+  }
+  if (active.length === 0) active.push("general");
+  return { primary: maxDomain, active };
+}
+
+const routerTests = [
+  { input: "Calculate f(8) = 49649 * 801 - 62 using the recurrence formula", expectedPrimary: "computation", mustInclude: "computation", mustExclude: "argumentation" },
+  { input: "Critics argue that the premise is flawed and we should refute this claim", expectedPrimary: "argumentation", mustInclude: "argumentation", mustExclude: "computation" },
+  { input: "Based on the trend, I predict a 70% probability of success using bayesian analysis", expectedPrimary: "prediction", mustInclude: "prediction", mustExclude: "argumentation" },
+  { input: "The cognitive bias of anchoring causes irrational decision-making according to Kahneman", expectedPrimary: "psychology", mustInclude: "psychology", mustExclude: "computation" },
+  { input: "In this zero-sum game, player 1 should use a minimax strategy to find Nash equilibrium", expectedPrimary: "game_theory", mustInclude: "game_theory", mustExclude: "argumentation" },
+  { input: "The weather is nice today and I had coffee this morning", expectedPrimary: "general", mustInclude: "general", mustExclude: "argumentation" },
+  { input: "No alternative recurrence fits the data when we verify the computation", expectedPrimary: "computation", mustInclude: "computation", mustExclude: "argumentation" },
+];
+
+for (const rt of routerTests) {
+  totalTests++;
+  const result = testClassifyDomain(rt.input);
+  const primaryOk = result.primary === rt.expectedPrimary;
+  const includeOk = result.active.includes(rt.mustInclude as CognitiveDomain);
+  const excludeOk = !result.active.includes(rt.mustExclude as CognitiveDomain);
+  const pass = primaryOk && includeOk && excludeOk;
+  if (pass) {
+    passed++;
+    console.log(`  ✅ ${rt.expectedPrimary}: "${rt.input.substring(0, 55)}"`);
+  } else {
+    failed++;
+    const reason = !primaryOk ? `primary=${result.primary}` : !includeOk ? `missing ${rt.mustInclude}` : `unwanted ${rt.mustExclude}`;
+    failures.push(`ROUTER: Expected ${rt.expectedPrimary} (${reason}) for "${rt.input.substring(0, 60)}"`);
+    console.log(`  ❌ ${rt.expectedPrimary}: FAILED (${reason}) — "${rt.input.substring(0, 55)}"`);
+  }
+}
+
 // ─── SUMMARY ──────
 console.log("\n═══════════════════════════════════════════════════");
 console.log(`  TOTAL: ${totalTests} | PASSED: ${passed} | FAILED: ${failed}`);
