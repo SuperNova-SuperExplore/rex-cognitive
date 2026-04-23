@@ -601,6 +601,8 @@ function shuntingYard(expr: string): number | null {
     } else if (token === "(") {
       ops.push(token);
     } else if (token === ")") {
+      // Find matching "("
+      let foundOpen = false;
       while (ops.length && ops[ops.length - 1] !== "(") {
         const op = ops.pop()!;
         if (output.length < 2) return null;
@@ -608,7 +610,11 @@ function shuntingYard(expr: string): number | null {
         const a = output.pop()!;
         output.push(applyOp(a, b, op));
       }
-      ops.pop(); // remove "("
+      if (ops.length && ops[ops.length - 1] === "(") {
+        ops.pop(); // remove matching "("
+        foundOpen = true;
+      }
+      // If no matching "(" found, just continue (graceful handling)
     }
   }
   while (ops.length) {
@@ -631,8 +637,9 @@ function applyOp(a: number, b: number, op: string): number {
   }
 }
 
-// Pattern: "expr = number" (e.g., "5*3 - 2 = 13", "49649 * 801 = 39768849")
-const ARITHMETIC_EXPR = /(\d[\d\s\*\+\-\/\(\),×÷\.]*\d)\s*=\s*(\d[\d,\.]*)/g;
+// Pattern: "expr = number" (e.g., "5*3 - 2 = 13", "(25 + 4) / 2 = 14")
+// Supports leading parentheses for grouped expressions
+const ARITHMETIC_EXPR = /([\(]?\d[\d\s\*\+\-\/\(\),×÷\.]*\d\)?)\s*=\s*(\d[\d,\.]*)/g;
 
 function analyzeComputation(thought: string): ComputationAnalysis {
   const arithmeticChecks: ArithmeticCheck[] = [];
