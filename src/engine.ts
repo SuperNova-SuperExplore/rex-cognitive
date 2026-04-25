@@ -346,23 +346,30 @@ export class RexEngine {
       if (prev.thoughtNumber === thoughtNum) continue;
       const prevWords = this.tokenize(prev.thought);
 
-      // Method 1: Syntactic "is/is not" pattern
+      // Method 1: Syntactic negation detection (expanded)
+      // Covers: is/not, never, cannot, doesn't, fails to, unable to
+      const NEGATION_MARKERS = /\b(?:not|never|no|cannot|can'?t|won'?t|doesn'?t|don'?t|isn'?t|aren'?t|wasn'?t|weren'?t|shouldn'?t|mustn'?t|fails?\s+to|unable\s+to|lack(?:s|ing)?)\b/i;
       const claimPatterns = [
         /(\w+(?:\s\w+)?)\s+(?:is|are|was|were)\s+(not\s+)?(\w+(?:\s\w+)?)/gi,
-        /(\w+(?:\s\w+)?)\s+(?:should|must|will)\s+(not\s+)?(\w+(?:\s\w+)?)/gi,
+        /(\w+(?:\s\w+)?)\s+(?:should|must|will|can|does|do)\s+(not\s+)?(\w+(?:\s\w+)?)/gi,
       ];
       const currentLower = thought.toLowerCase();
       const prevLower = prev.thought.toLowerCase();
+
+      // Check for broad negation polarity flip
+      const currentNegated = NEGATION_MARKERS.test(currentLower);
+      const prevNegated = NEGATION_MARKERS.test(prevLower);
 
       for (const pattern of claimPatterns) {
         pattern.lastIndex = 0;
         let match;
         while ((match = pattern.exec(currentLower)) !== null) {
           const subject = match[1].trim();
+          if (subject.length < 2) continue; // skip single-char matches
           const isNegated = !!match[2];
           const oppositePattern = isNegated
-            ? new RegExp(`${subject}\\s+(?:is|are|should|must|will)\\s+(?!not)`, "i")
-            : new RegExp(`${subject}\\s+(?:is|are|should|must|will)\\s+not`, "i");
+            ? new RegExp(`${subject}\\s+(?:is|are|should|must|will|can|does|do)\\s+(?!not)`, "i")
+            : new RegExp(`${subject}\\s+(?:is|are|should|must|will|can|does|do)\\s+not`, "i");
           if (oppositePattern.test(prevLower)) {
             contradictions.push({
               currentThought: thoughtNum,
@@ -379,7 +386,7 @@ export class RexEngine {
       const prevStems = new Set(prev.stems);
       const sharedStems = [...currentStems].filter(s => prevStems.has(s));
 
-      if (sharedStems.length >= 1) {
+      if (sharedStems.length >= 2) {
         // Check if current and previous have antonym pairs
         for (const cw of currentWords) {
           const antonyms = ANTONYM_MAP.get(cw.toLowerCase());
