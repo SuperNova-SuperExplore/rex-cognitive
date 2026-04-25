@@ -390,12 +390,39 @@ export class RexEngine {
       const sharedStems = [...currentStems].filter(s => prevStems.has(s));
 
       if (sharedStems.length >= 2) {
-        // Check if current and previous have antonym pairs
-        for (const cw of currentWords) {
+        // Build position index: for each word, record its index in the token array
+        const CONTEXT_WINDOW = 3; // antonym must be within ±3 words of a shared topic word
+
+        // Find positions of shared topic words in each thought
+        const sharedSet = new Set(sharedStems);
+        const currentTopicPositions = new Set<number>();
+        const prevTopicPositions = new Set<number>();
+
+        for (let i = 0; i < currentWords.length; i++) {
+          if (sharedSet.has(this.stem(currentWords[i].toLowerCase()))) currentTopicPositions.add(i);
+        }
+        for (let i = 0; i < prevWords.length; i++) {
+          if (sharedSet.has(this.stem(prevWords[i].toLowerCase()))) prevTopicPositions.add(i);
+        }
+
+        // Helper: is word at position idx near any topic position?
+        const nearTopic = (idx: number, topicPositions: Set<number>): boolean => {
+          for (const tp of topicPositions) {
+            if (Math.abs(idx - tp) <= CONTEXT_WINDOW) return true;
+          }
+          return false;
+        };
+
+        // Check antonym pairs with context window
+        for (let ci = 0; ci < currentWords.length; ci++) {
+          const cw = currentWords[ci];
           const antonyms = ANTONYM_MAP.get(cw.toLowerCase());
           if (!antonyms) continue;
-          for (const pw of prevWords) {
-            if (antonyms.has(pw.toLowerCase())) {
+          if (!nearTopic(ci, currentTopicPositions)) continue; // antonym must be near topic in current
+
+          for (let pi = 0; pi < prevWords.length; pi++) {
+            const pw = prevWords[pi];
+            if (antonyms.has(pw.toLowerCase()) && nearTopic(pi, prevTopicPositions)) {
               const shared = sharedStems.slice(0, 3).join(", ");
               contradictions.push({
                 currentThought: thoughtNum,
