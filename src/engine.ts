@@ -365,7 +365,10 @@ export class RexEngine {
         let match;
         while ((match = pattern.exec(currentLower)) !== null) {
           const subject = match[1].trim();
-          if (subject.length < 2) continue; // skip single-char matches
+          if (subject.length < 2) continue;
+          // Skip pronouns/determiners — "this is not X" vs "this is Y" is referential, not contradictory
+          const SKIP_SUBJECTS = new Set(['this', 'that', 'it', 'they', 'there', 'here', 'we', 'he', 'she', 'what', 'which', 'the', 'a', 'an', 'these', 'those', 'i']);
+          if (SKIP_SUBJECTS.has(subject)) continue;
           const isNegated = !!match[2];
           const oppositePattern = isNegated
             ? new RegExp(`${subject}\\s+(?:is|are|should|must|will|can|does|do)\\s+(?!not)`, "i")
