@@ -1,0 +1,32 @@
+{
+  "name": "rex-cognitive-engine",
+  "version": "4.2.0",
+  "description": "Enhanced sequential thinking MCP server with contradiction detection, repetition analysis, quality scoring, and hypothesis tracking.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "sequential-thinking",
+    "reasoning",
+    "contradiction-detection",
+    "cognitive-engine"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SuperNova-SuperExplore/rex-cognitive"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.3"
+  }
+}
